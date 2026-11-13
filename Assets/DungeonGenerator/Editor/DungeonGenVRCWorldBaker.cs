@@ -100,6 +100,60 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
         Selection.activeGameObject = obj;
     }
 
+    [MenuItem("Tools/Dungeon Generator/Validate Observed Floor Rules")]
+    public static void ValidateObservedFloorRules()
+    {
+        const int samplesPerFloor = 40;
+        int tested = 0, f2Missing = 0, f4Missing = 0, f6P4 = 0;
+        try
+        {
+            for (int testedFloor = 1; testedFloor <= 7; testedFloor++)
+            {
+                for (int i = 0; i < samplesPerFloor; i++)
+                {
+                    Layout layout = GenerateLayout(testedFloor,
+                        unchecked(84271 + 1709 * i + testedFloor * 37), .35f, .50f);
+                    VerifyTree(layout);
+
+                    bool correctSize = testedFloor == 1
+                        ? ((layout.Width == 4 && layout.Height == 5) ||
+                           (layout.Width == 5 && layout.Height == 4))
+                        : testedFloor == 4 || testedFloor == 5
+                            ? ((layout.Width == 6 && layout.Height == 5) ||
+                               (layout.Width == 5 && layout.Height == 6))
+                            : (layout.Width == Widths[testedFloor - 1] &&
+                               layout.Height == Heights[testedFloor - 1]);
+
+                    if (!correctSize)
+                        throw new InvalidOperationException(
+                            "Unexpected dimensions at F" + testedFloor);
+
+                    if (testedFloor == 6 &&
+                        (layout.PuzzleTarget < 3 || layout.PuzzleTarget > 4))
+                        throw new InvalidOperationException("F6 Puzzle count outside P3-P4.");
+
+                    if (testedFloor == 2 && layout.MissingCells.Count == 1)
+                        f2Missing++;
+                    if (testedFloor == 4 && layout.MissingCells.Count > 0)
+                        f4Missing++;
+                    if (testedFloor == 6 && layout.PuzzleTarget == 4)
+                        f6P4++;
+                    tested++;
+                }
+            }
+            Debug.Log("DungeonGeneratorVRC: validated " + tested +
+                " floor layouts. F2 missing-one examples=" + f2Missing +
+                ", F4 missing-edge examples=" + f4Missing +
+                ", F6 P4 examples=" + f6P4 + ".");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogException(ex);
+            EditorUtility.DisplayDialog("Dungeon Generator",
+                "Floor validation failed: " + ex.Message, "OK");
+        }
+    }
+
     private void OnGUI()
     {
         EditorGUILayout.LabelField("VRChat Dungeon Generator", EditorStyles.boldLabel);
