@@ -1,0 +1,27 @@
+# Keep the repository usable as a Unity 2022 VRChat Assets package.
+# If the whole ALCOM project is committed later, these Unity-generated
+# folders should still be ignored.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+*.csproj
+*.sln
+*.slnx
+*.user
+*.userprefs
+*.pidb
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
