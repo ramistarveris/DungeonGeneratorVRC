@@ -12,6 +12,12 @@ public class DungeonGenVRCComponent : UdonSharpBehaviour
     [Tooltip("OFF: map preview. ON: 3D world with in-world control panel.")]
     public bool dungeonMode = true;
 
+    [Header("Observed Floor Rules")]
+    [Tooltip("Observed: F2 sometimes has one missing boundary cell. This probability is an adjustable estimate.")]
+    [Range(0f, 1f)] public float f2MissingChance = .35f;
+    [Tooltip("Observed: F4 sometimes has 1 to 3 missing boundary cells. This probability is an adjustable estimate.")]
+    [Range(0f, 1f)] public float f4MissingChance = .50f;
+
     [Header("VRChat In-World Generator")]
     [Range(2, 12)] public int bakedVariants = 4;
 
