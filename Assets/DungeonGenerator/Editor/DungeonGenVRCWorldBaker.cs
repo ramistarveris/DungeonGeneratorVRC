@@ -19,9 +19,11 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
     private const string PreviewRoot = "DG_Generated";
     private const string RuntimeRoot = "DG_RuntimeCollection";
     private const string MaterialFolder = "Assets/DungeonGenerator/Generated";
-    private static readonly int[] Widths = { 4, 5, 5, 6, 6, 6, 6 };
+    // Observed in-game footprints and puzzle room counts (F1-F6).
+    // F7 keeps the previous estimate until new in-game samples are available.
+    private static readonly int[] Widths = { 4, 5, 5, 6, 6, 5, 6 };
     private static readonly int[] Heights = { 5, 5, 5, 5, 5, 6, 6 };
-    private static readonly int[] PuzzleCounts = { 2, 2, 2, 3, 4, 4, 5 };
+    private static readonly int[] PuzzleCounts = { 3, 3, 2, 4, 3, 3, 5 };
     private static readonly Vector2Int[] Directions =
         { Vector2Int.up, Vector2Int.right, Vector2Int.down, Vector2Int.left };
     private static readonly Vector2Int[][] Shapes =
@@ -52,8 +54,9 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
 
     private sealed class Layout
     {
-        public int Width, Height, Seed;
+        public int Floor, Width, Height, Seed, PuzzleTarget;
         public Vector2Int Start, First, Blood;
+        public readonly HashSet<Vector2Int> MissingCells = new HashSet<Vector2Int>();
         public readonly List<Edge> Edges = new List<Edge>();
         public readonly List<Room> Rooms = new List<Room>();
         public readonly Dictionary<Vector2Int, int> CellRoom =
@@ -67,6 +70,9 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
     private int variants = 4;
     private float spacing = 26f, roomSize = 20f, corridorWidth = 5f;
     private float wallHeight = 6f, wallThickness = .8f;
+    // Frequency is configurable because observations establish that missing
+    // tiles sometimes occur, but not how often they occur.
+    private float f2MissingChance = .35f, f4MissingChance = .50f;
     private bool ceiling;
     private int lastSeed;
     private readonly Dictionary<string, Material> materialCache =
@@ -103,6 +109,14 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
             MessageType.Info);
         floor = EditorGUILayout.IntSlider("Floor", floor, 1, 7);
         seedText = EditorGUILayout.TextField("Seed", seedText);
+        EditorGUILayout.HelpBox(
+            "Observed: F1 4x5/5x4 P3, F2 5x5 P3, F3 5x5 P2, " +
+            "F4 6x5/5x6 P4, F5 6x5/5x6 P3, F6 5x6 P3-4. " +
+            "F7 remains provisional.", MessageType.None);
+        f2MissingChance = EditorGUILayout.Slider(
+            "F2 Missing 1 Tile Chance", f2MissingChance, 0f, 1f);
+        f4MissingChance = EditorGUILayout.Slider(
+            "F4 Missing 1-3 Edge Tiles Chance", f4MissingChance, 0f, 1f);
         mode = (MapMode)EditorGUILayout.EnumPopup("Mode", mode);
         variants = EditorGUILayout.IntSlider("Baked Variants", variants, 2, 12);
         spacing = EditorGUILayout.FloatField("Cell Spacing", spacing);
@@ -134,6 +148,8 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
             baker.corridorWidth = config.corridorWidth;
             baker.wallHeight = config.wallHeight;
             baker.wallThickness = config.wallThickness;
+            baker.f2MissingChance = config.f2MissingChance;
+            baker.f4MissingChance = config.f4MissingChance;
             baker.ceiling = config.generateCeilings;
             baker.Bake();
         }
@@ -149,6 +165,8 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
         wallHeight = Mathf.Max(2f, wallHeight);
         wallThickness = Mathf.Clamp(wallThickness, .1f, roomSize * .15f);
         variants = Mathf.Clamp(variants, 2, 12);
+        f2MissingChance = Mathf.Clamp01(f2MissingChance);
+        f4MissingChance = Mathf.Clamp01(f4MissingChance);
         materialCache.Clear();
 
         try
@@ -160,7 +178,8 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
             for (int i = 0; i < count; i++)
             {
                 seeds[i] = i == 0 ? initial : unchecked(initial + 7919 * i);
-                layouts[i] = GenerateLayout(Mathf.Clamp(floor, 1, 7), seeds[i]);
+                layouts[i] = GenerateLayout(Mathf.Clamp(floor, 1, 7), seeds[i],
+                    f2MissingChance, f4MissingChance);
                 VerifyTree(layouts[i]);
             }
             lastSeed = initial;
@@ -298,13 +317,37 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
         return seen.Count == cells.Count;
     }
 
-    private static Layout GenerateLayout(int floor, int seed)
+    private static Layout GenerateLayout(int floor, int seed,
+        float missingF2Chance, float missingF4Chance)
     {
-        System.Random rng = new System.Random(seed);
+        // Retry with deterministic attempt seeds when the observed special
+        // room quota cannot fit on bonus branches or a gap disconnects the map.
+        for (int attempt = 0; attempt < 256; attempt++)
+        {
+            Layout candidate = TryGenerateLayout(floor, seed, attempt,
+                missingF2Chance, missingF4Chance);
+            if (candidate != null) return candidate;
+        }
+        throw new InvalidOperationException(
+            "Could not generate a connected dungeon with all required puzzle rooms.");
+    }
+
+    private static Layout TryGenerateLayout(int floor, int seed, int attempt,
+        float missingF2Chance, float missingF4Chance)
+    {
+        System.Random rng = new System.Random(unchecked(seed + attempt * 104729));
         Layout layout = new Layout();
+        layout.Floor = floor;
         layout.Width = Widths[floor - 1];
         layout.Height = Heights[floor - 1];
         layout.Seed = seed;
+        if ((floor == 1 || floor == 4 || floor == 5) && rng.Next(2) == 0)
+        {
+            int oldWidth = layout.Width;
+            layout.Width = layout.Height;
+            layout.Height = oldWidth;
+        }
+        layout.PuzzleTarget = floor == 6 ? rng.Next(3, 5) : PuzzleCounts[floor - 1];
         int w = layout.Width, h = layout.Height;
         int side = rng.Next(4);
         layout.Start = side == 0 ? new Vector2Int(0, rng.Next(h)) :
@@ -330,6 +373,14 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
         }
         layout.Blood = bloodChoices[rng.Next(bloodChoices.Count)];
 
+        int missingTarget = 0;
+        if (floor == 2 && rng.NextDouble() < missingF2Chance)
+            missingTarget = 1;
+        else if (floor == 4 && rng.NextDouble() < missingF4Chance)
+            missingTarget = rng.Next(1, 4);
+        if (!ChooseMissingBoundaryCells(layout, rng, missingTarget))
+            return null;
+
         // DFS spanning tree: Start is always a leaf and has exactly one exit.
         HashSet<Vector2Int> used = new HashSet<Vector2Int>
             { layout.Start, layout.First };
@@ -344,7 +395,8 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
             {
                 Vector2Int n = p + d;
                 if (n.x >= 0 && n.y >= 0 && n.x < w && n.y < h &&
-                    n != layout.Blood && !used.Contains(n)) neighbors.Add(n);
+                    n != layout.Blood && !layout.MissingCells.Contains(n) &&
+                    !used.Contains(n)) neighbors.Add(n);
             }
             if (neighbors.Count == 0) { stack.Pop(); continue; }
             Vector2Int chosen = neighbors[rng.Next(neighbors.Count)];
@@ -352,8 +404,8 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
             layout.Edges.Add(new Edge(p, chosen));
             stack.Push(chosen);
         }
-        if (used.Count != w * h - 1)
-            throw new InvalidOperationException("Spanning tree did not cover the map.");
+        if (used.Count != w * h - layout.MissingCells.Count - 1)
+            return null;
 
         // Attach Blood by exactly one edge.
         Dictionary<Vector2Int, int> distances = Distances(layout.Start, layout.Edges);
@@ -400,12 +452,15 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
         for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
         {
             Vector2Int p = new Vector2Int(x, y);
-            if (layout.Critical.Contains(p) || types.ContainsKey(p)) continue;
+            if (layout.MissingCells.Contains(p) ||
+                layout.Critical.Contains(p) || types.ContainsKey(p)) continue;
             bonus.Add(p);
         }
         // Put special rooms on leaves first.
         bonus.Sort((a, b) => Degree(a, layout.Edges).CompareTo(Degree(b, layout.Edges)));
-        int specialCount = Mathf.Min(PuzzleCounts[floor - 1], bonus.Count);
+        int requiredBonus = layout.PuzzleTarget + (floor >= 3 ? 1 : 0) + 1;
+        if (bonus.Count < requiredBonus) return null;
+        int specialCount = layout.PuzzleTarget;
         int index = 0;
         for (; index < specialCount; index++) types[bonus[index]] = "Puzzle";
         if (floor >= 3 && index < bonus.Count) types[bonus[index++]] = "Trap";
@@ -419,7 +474,8 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
         for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
         {
             Vector2Int p = new Vector2Int(x, y);
-            if (!types.ContainsKey(p)) remaining.Add(p);
+            if (!types.ContainsKey(p) && !layout.MissingCells.Contains(p))
+                remaining.Add(p);
         }
 
         while (remaining.Count > 0)
@@ -456,6 +512,72 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
             foreach (Vector2Int p in bestCells) remaining.Remove(p);
         }
         return layout;
+    }
+
+    // Only the outer boundary may be missing. Never remove Start, the
+    // first connected cell, or Blood. Reject cuts that isolate any cell
+    // when Blood is held aside as the terminal leaf.
+    private static bool ChooseMissingBoundaryCells(Layout layout, System.Random rng,
+        int count)
+    {
+        if (count == 0) return true;
+        List<Vector2Int> choices = new List<Vector2Int>();
+        for (int y = 0; y < layout.Height; y++)
+        for (int x = 0; x < layout.Width; x++)
+        {
+            Vector2Int p = new Vector2Int(x, y);
+            if (p == layout.Start || p == layout.First || p == layout.Blood)
+                continue;
+            if (x == 0 || y == 0 || x == layout.Width - 1 || y == layout.Height - 1)
+                choices.Add(p);
+        }
+        for (int i = choices.Count - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            Vector2Int tmp = choices[i]; choices[i] = choices[j]; choices[j] = tmp;
+        }
+
+        foreach (Vector2Int p in choices)
+        {
+            layout.MissingCells.Add(p);
+            if (!IsRemainingGridConnected(layout))
+                layout.MissingCells.Remove(p);
+            if (layout.MissingCells.Count == count) return true;
+        }
+        return false;
+    }
+
+    private static bool IsRemainingGridConnected(Layout layout)
+    {
+        HashSet<Vector2Int> seen = new HashSet<Vector2Int>();
+        Queue<Vector2Int> queue = new Queue<Vector2Int>();
+        seen.Add(layout.Start);
+        queue.Enqueue(layout.Start);
+
+        while (queue.Count > 0)
+        {
+            Vector2Int p = queue.Dequeue();
+            foreach (Vector2Int d in Directions)
+            {
+                Vector2Int next = p + d;
+                if (next.x < 0 || next.y < 0 ||
+                    next.x >= layout.Width || next.y >= layout.Height ||
+                    next == layout.Blood || layout.MissingCells.Contains(next) ||
+                    !seen.Add(next)) continue;
+                queue.Enqueue(next);
+            }
+        }
+        int usableWithoutBlood = layout.Width * layout.Height
+            - layout.MissingCells.Count - 1;
+        if (seen.Count != usableWithoutBlood) return false;
+
+        foreach (Vector2Int direction in Directions)
+        {
+            Vector2Int neighbor = layout.Blood + direction;
+            if (neighbor != layout.Start && seen.Contains(neighbor))
+                return true;
+        }
+        return false;
     }
 
     private static Dictionary<Vector2Int, int> Distances(Vector2Int origin, List<Edge> edges)
@@ -499,10 +621,31 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
 
     private static void VerifyTree(Layout layout)
     {
+        int cells = layout.Width * layout.Height - layout.MissingCells.Count;
+        if (layout.CellRoom.Count != cells || layout.Edges.Count != cells - 1)
+            throw new InvalidOperationException("Incorrect occupied cell/edge count.");
+
+        foreach (Vector2Int p in layout.MissingCells)
+        {
+            if (layout.CellRoom.ContainsKey(p) ||
+                !(p.x == 0 || p.y == 0 ||
+                  p.x == layout.Width - 1 || p.y == layout.Height - 1))
+                throw new InvalidOperationException("Invalid missing edge cell.");
+        }
+
+        int puzzles = 0;
+        foreach (Room room in layout.Rooms)
+            if (room.Kind == "Puzzle") puzzles++;
+        if (puzzles != layout.PuzzleTarget)
+            throw new InvalidOperationException("Incorrect number of Puzzle rooms.");
+
         HashSet<string> rooms = new HashSet<string>();
         int startDegree = 0, bloodDegree = 0;
         foreach (Edge edge in layout.Edges)
         {
+            if (!layout.CellRoom.ContainsKey(edge.A) ||
+                !layout.CellRoom.ContainsKey(edge.B))
+                throw new InvalidOperationException("Connection to missing cell.");
             int a = layout.CellRoom[edge.A], b = layout.CellRoom[edge.B];
             if (a == b) continue;
             string key = Mathf.Min(a, b) + "/" + Mathf.Max(a, b);
@@ -513,6 +656,13 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
         if (rooms.Count != layout.Rooms.Count - 1 ||
             startDegree != 1 || bloodDegree != 1)
             throw new InvalidOperationException("Invalid room tree.");
+        if (layout.Floor != 2 && layout.Floor != 4 &&
+            layout.MissingCells.Count != 0)
+            throw new InvalidOperationException("Unexpected missing cells.");
+        if (layout.Floor == 2 && layout.MissingCells.Count > 1)
+            throw new InvalidOperationException("F2 exceeds missing tile limit.");
+        if (layout.Floor == 4 && layout.MissingCells.Count > 3)
+            throw new InvalidOperationException("F4 exceeds missing tile limit.");
     }
 
     private static Color ColorFor(string kind)
