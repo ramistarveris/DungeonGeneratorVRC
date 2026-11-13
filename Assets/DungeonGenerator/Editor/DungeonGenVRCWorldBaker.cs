@@ -27,7 +27,7 @@ public sealed class DungeonGenVRCWorldBaker : EditorWindow
     private static readonly Vector2Int[][] Shapes =
     {
         new[] { Vector2Int.zero, Vector2Int.right, Vector2Int.up, Vector2Int.one },
-        new[] { Vector2Int.zero, Vector2Int.right, 2 * Vector2Int.right, 3 * Vector2Int.right },
+        new[] { Vector2Int.zero, Vector2Int.right, Vector2Int.right * 2, Vector2Int.right * 3 },
         new[] { Vector2Int.zero, Vector2Int.right, 2 * Vector2Int.right },
         new[] { Vector2Int.zero, Vector2Int.right, Vector2Int.up },
         new[] { Vector2Int.zero, Vector2Int.right }
